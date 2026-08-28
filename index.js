@@ -5,7 +5,7 @@ const ical = require('ical-generator').default;
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// API pública oficial de deportes (Fixture completo y actualizado)
+// API pública de deportes
 const ESPN_SCHEDULE_URL = 'https://site.api.espn.com/apis/site/v2/sports/soccer/uru.1/teams/nacional/schedule';
 
 app.get('/nacional.ics', async (req, res) => {
@@ -17,23 +17,23 @@ app.get('/nacional.ics', async (req, res) => {
 
     events.forEach(event => {
       const competition = event.competitions[0];
-      const venue = competition.venue ? competition.venue.fullName : '';
+      const venue = competition.venue ? competition.venue.fullName : 'Gran Parque Central';
       const startDate = new Date(event.date);
       const endDate = new Date(startDate.getTime() + (2 * 60 * 60 * 1000));
 
-      const esEnParque = venue.toLowerCase().includes('parque central') || 
-                         venue.toLowerCase().includes('gran parque central') ||
-                         competition.competitors.some(c => c.homeAway === 'home' && c.team.displayName.includes('Nacional'));
+      // Verificamos si Nacional juega como Local
+      const esLocal = competition.competitors.some(c => c.homeAway === 'home' && c.team.displayName.toLowerCase().includes('nacional'));
 
-      if (esEnParque) {
-        calendar.createEvent({
-          start: startDate,
-          end: endDate,
-          summary: `⚠️ PARTIDO: ${event.name}`,
-          location: venue || 'Gran Parque Central',
-          description: 'Alerta de tránsito: Partido fijado en el Gran Parque Central. Evitar la zona.'
-        });
-      }
+      // Creamos el evento especificando si es Local o Visitante
+      calendar.createEvent({
+        start: startDate,
+        end: endDate,
+        summary: esLocal ? `🏠 LOCAL: ${event.name}` : `✈️ VISITANTE: ${event.name}`,
+        location: esLocal ? 'Gran Parque Central' : venue,
+        description: esLocal 
+          ? '⚠️ ATENCIÓN: Partido de LOCAL en el Gran Parque Central. Precaución por tráfico y cortes de calle.' 
+          : 'Partido de visitante.'
+      });
     });
 
     res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
@@ -45,4 +45,4 @@ app.get('/nacional.ics', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => console.log(`Servidor activo en el puerto ${PORT}`));
+app.listen(PORT, () => console.log(`Servidor activo en puerto ${PORT}`));
