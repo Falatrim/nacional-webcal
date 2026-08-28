@@ -5,18 +5,12 @@ const ical = require('ical-generator').default;
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// Obtiene la API Key desde las variables de entorno de Render
-const API_KEY = process.env.FOOTBALL_API_KEY; 
-const TEAM_ID = 2356; // ID de Nacional de Uruguay
+const API_KEY = process.env.FOOTBALL_API_KEY || '961e65f5acf251c37901b322e53c3e65';
+const TEAM_ID = 2356; // Nacional de Uruguay
 
 app.get('/nacional.ics', async (req, res) => {
   try {
     const calendar = ical({ name: 'Alertas Parque Central' });
-
-    if (!API_KEY) {
-      console.error('Error: No se ha configurado la API Key.');
-      return res.status(500).send('Error de configuración en el servidor');
-    }
 
     const response = await axios.get('https://v3.football.api-sports.io/fixtures', {
       params: {
@@ -32,19 +26,25 @@ app.get('/nacional.ics', async (req, res) => {
     const matches = response.data.response || [];
 
     matches.forEach(match => {
-      const venueName = (match.fixture.venue.name || '').toLowerCase();
       const isHome = match.teams.home.id === TEAM_ID;
+      const venueName = (match.fixture.venue.name || '').toLowerCase();
+      
+      // Captura si Nacional es local o si la sede contiene "parque central" o "gran parque"
+      const isParqueCentral = isHome || venueName.includes('parque central') || venueName.includes('gran parque');
 
-      if (isHome || venueName.includes('parque central')) {
+      if (isParqueCentral) {
         const matchDate = new Date(match.fixture.date);
-        const endDate = new Date(matchDate.getTime() + (2 * 60 * 60 * 1000));
+        const endDate = new Date(matchDate.getTime() + (2 * 60 * 60 * 1000)); // 2 horas de duración
+        
+        const opponent = isHome ? match.teams.away.name : match.teams.home.name;
+        const locationText = match.fixture.venue.name || 'Gran Parque Central';
 
         calendar.createEvent({
           start: matchDate,
           end: endDate,
-          summary: `🏠 LOCAL: Nacional vs ${match.teams.away.name}`,
-          location: match.fixture.venue.name || 'Gran Parque Central',
-          description: `⚠️ Alerta de tránsito: Partido confirmado por API-Football. Torneo: ${match.league.name}.`
+          summary: `🏠 LOCAL: Nacional vs ${opponent}`,
+          location: locationText,
+          description: `⚠️ Alerta de tránsito: Partido confirmado. Torneo: ${match.league.name}.`
         });
       }
     });
