@@ -5,8 +5,9 @@ const ical = require('ical-generator').default;
 const app = express();
 const PORT = process.env.PORT || 10000;
 
+// Utiliza la variable de entorno o toma la clave directamente si no está configurada
 const API_KEY = process.env.FOOTBALL_API_KEY || '961e65f5acf251c37901b322e53c3e65';
-const TEAM_ID = 2356; // Nacional de Uruguay
+const TEAM_ID = 2356; // ID de Nacional de Uruguay
 
 app.get('/nacional.ics', async (req, res) => {
   try {
@@ -18,7 +19,8 @@ app.get('/nacional.ics', async (req, res) => {
         next: 10
       },
       headers: {
-        'x-apisports-key': API_KEY
+        'x-apisports-key': API_KEY,
+        'x-rapidapi-key': API_KEY
       },
       timeout: 10000
     });
@@ -28,13 +30,11 @@ app.get('/nacional.ics', async (req, res) => {
     matches.forEach(match => {
       const isHome = match.teams.home.id === TEAM_ID;
       const venueName = (match.fixture.venue.name || '').toLowerCase();
-      
-      // Captura si Nacional es local o si la sede contiene "parque central" o "gran parque"
       const isParqueCentral = isHome || venueName.includes('parque central') || venueName.includes('gran parque');
 
       if (isParqueCentral) {
         const matchDate = new Date(match.fixture.date);
-        const endDate = new Date(matchDate.getTime() + (2 * 60 * 60 * 1000)); // 2 horas de duración
+        const endDate = new Date(matchDate.getTime() + (2 * 60 * 60 * 1000));
         
         const opponent = isHome ? match.teams.away.name : match.teams.home.name;
         const locationText = match.fixture.venue.name || 'Gran Parque Central';
@@ -62,3 +62,4 @@ app.get('/nacional.ics', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Servidor activo en puerto ${PORT}`);
 });
+
