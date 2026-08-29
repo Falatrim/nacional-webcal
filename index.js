@@ -1,65 +1,77 @@
 const express = require('express');
 const axios = require('axios');
-const ical = require('ical-generator').default;
+const ics = require('ics');
 
 const app = express();
-const PORT = process.env.PORT || 10000;
+const PORT = process.env.PORT || 3000;
 
-// Utiliza la variable de entorno o toma la clave directamente si no está configurada
-const API_KEY = process.env.FOOTBALL_API_KEY || '961e65f5acf251c37901b322e53c3e65';
-const TEAM_ID = 2356; // ID de Nacional de Uruguay
+// API gratuita de TheSportsDB para los próximos partidos de Nacional
+const API_URL = 'https://www.thesportsdb.com/api/v1/json/3/eventsnext.php?id=135364';
 
-app.get('/nacional.ics', async (req, res) => {
+app.get('/calendario.ics', async (req, res) => {
   try {
-    const calendar = ical({ name: 'Alertas Parque Central' });
+    const response = await axios.get(API_URL);
+    const eventsData = response.data.events || [];
 
-    const response = await axios.get('https://v3.football.api-sports.io/fixtures', {
-      params: {
-        team: TEAM_ID,
-        next: 10
-      },
-      headers: {
-        'x-apisports-key': API_KEY,
-        'x-rapidapi-key': API_KEY
-      },
-      timeout: 10000
+    // Filtrar partidos jugados de local o confirmados en el Gran Parque Central
+    const gpcEvents = eventsData.filter(event => {
+      const isHome = event.idHomeTeam === '135364';
+      const isGPC = event.strVenue && event.strVenue.toLowerCase().includes('gran parque central');
+      return isHome || isGPC;
     });
 
-    const matches = response.data.response || [];
+    if (gpcEvents.length === 0) {
+      const events = [{
+        title: 'Sin partidos confirmados en el GPC',
+        start: [2026, 8, 1, 12, 0],
+        duration: { hours: 1 },
+        description: 'No hay partidos de Nacional confirmados en el Gran Parque Central por el momento.'
+      }];
+      const { value } = ics.createEvents(events);
+      res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
+      return res.send(value);
+    }
 
-    matches.forEach(match => {
-      const isHome = match.teams.home.id === TEAM_ID;
-      const venueName = (match.fixture.venue.name || '').toLowerCase();
-      const isParqueCentral = isHome || venueName.includes('parque central') || venueName.includes('gran parque');
+    // Formatear partidos al estándar ICS
+    const formattedEvents = gpcEvents.map(event => {
+      const eventDate = new Date(event.strTimestamp || `${event.dateEvent}T${event.strTime}`);
+      
+      const year = eventDate.getUTCFullYear();
+      const month = eventDate.getUTCMonth() + 1;
+      const day = eventDate.getUTCDate();
+      const hours = eventDate.getUTCHours();
+      const minutes = eventDate.getUTCMinutes();
 
-      if (isParqueCentral) {
-        const matchDate = new Date(match.fixture.date);
-        const endDate = new Date(matchDate.getTime() + (2 * 60 * 60 * 1000));
-        
-        const opponent = isHome ? match.teams.away.name : match.teams.home.name;
-        const locationText = match.fixture.venue.name || 'Gran Parque Central';
-
-        calendar.createEvent({
-          start: matchDate,
-          end: endDate,
-          summary: `🏠 LOCAL: Nacional vs ${opponent}`,
-          location: locationText,
-          description: `⚠️ Alerta de tránsito: Partido confirmado. Torneo: ${match.league.name}.`
-        });
-      }
+      return {
+        title: `Nacional vs ${event.strAwayTeam}`,
+        description: `Partido por ${event.strLeague || 'Primera División'} en el Gran Parque Central.`,
+        location: 'Estadio Gran Parque Central, Montevideo, Uruguay',
+        start: [year, month, day, hours, minutes],
+        duration: { hours: 2 }
+      };
     });
+
+    const { error, value } = ics.createEvents(formattedEvents);
+
+    if (error) {
+      console.error('Error generando ICS:', error);
+      return res.status(500).send('Error al generar el calendario.');
+    }
 
     res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
-    res.setHeader('Content-Disposition', 'inline; filename="nacional.ics"');
-    res.send(calendar.toString());
+    res.setHeader('Content-Disposition', 'attachment; filename="calendario-gpc.ics"');
+    res.send(value);
 
-  } catch (error) {
-    console.error('Error al consultar API-Football:', error.message);
-    res.status(500).send('Error generando el calendario');
+  } catch (err) {
+    console.error('Error al consultar TheSportsDB:', err.message);
+    res.status(500).send('Error al consultar los datos del partido.');
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Servidor activo en puerto ${PORT}`);
+app.get('/', (req, res) => {
+  res.send('Servidor Gran Parque Central activo.');
 });
 
+app.listen(PORT, () => {
+  console.log(`Servidor activo en el puerto ${PORT}`);
+});
