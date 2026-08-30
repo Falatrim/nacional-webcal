@@ -1,13 +1,13 @@
 {
-  "name": "calendario-gpc",
+  "name": "nacional-webcal",
   "version": "1.0.0",
-  "main": "server.js",
+  "description": "Notificador de partidos de Nacional en el Gran Parque Central",
+  "main": "index.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node index.js"
   },
   "dependencies": {
     "axios": "^1.6.0",
-    "express": "^4.18.2",
-    "ics": "^3.5.0"
+    "cheerio": "^1.0.0-rc.12"
   }
 }
