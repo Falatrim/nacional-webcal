@@ -1,80 +1,74 @@
-const express = require('express');
 const axios = require('axios');
-const ics = require('ics');
+const cheerio = require('cheerio');
 
-const app = express();
-const PORT = process.env.PORT || 3000;
+// Configuración desde Variables de Entorno de Render
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-// API gratuita de TheSportsDB para los próximos partidos de Nacional
-const API_URL = 'https://www.thesportsdb.com/api/v1/json/3/eventsnext.php?id=135364';
+const ESPN_URL = 'https://www.espn.com.uy/futbol/equipo/calendario/_/id/2684/nacional';
 
-app.get(['/', '/calendario.ics'], async (req, res) => {
-  try {
-    const response = await axios.get(API_URL);
-    const eventsData = response.data.events || [];
-
-    // Filtrar partidos jugados de local o en el Gran Parque Central
-    let gpcEvents = eventsData.filter(event => {
-      const isHome = event.idHomeTeam === '135364';
-      const isGPC = event.strVenue && event.strVenue.toLowerCase().includes('gran parque central');
-      return isHome || isGPC;
-    });
-
-    // Si no hay partidos locales en agenda, mostramos el próximo evento disponible de la API para probar la sincronización
-    if (gpcEvents.length === 0 && eventsData.length > 0) {
-      gpcEvents = eventsData;
-    }
-
-    if (gpcEvents.length === 0) {
-      const events = [{
-        title: 'Sin partidos confirmados de Nacional',
-        start: [2026, 8, 30, 15, 30],
-        duration: { hours: 2 },
-        description: 'No hay partidos confirmados en el calendario por el momento.'
-      }];
-      const { value } = ics.createEvents(events);
-      res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
-      return res.send(value);
-    }
-
-    // Formatear partidos al estándar ICS
-    const formattedEvents = gpcEvents.map(event => {
-      const eventDate = new Date(event.strTimestamp || `${event.dateEvent}T${event.strTime}`);
-      
-      const year = eventDate.getUTCFullYear();
-      const month = eventDate.getUTCMonth() + 1;
-      const day = eventDate.getUTCDate();
-      const hours = eventDate.getUTCHours();
-      const minutes = eventDate.getUTCMinutes();
-
-      const venue = event.strVenue || 'Estadio Gran Parque Central';
-
-      return {
-        title: `${event.strHomeTeam} vs ${event.strAwayTeam}`,
-        description: `Partido por ${event.strLeague || 'Primera División'}.`,
-        location: `${venue}, Montevideo, Uruguay`,
-        start: [year, month, day, hours, minutes],
-        duration: { hours: 2 }
-      };
-    });
-
-    const { error, value } = ics.createEvents(formattedEvents);
-
-    if (error) {
-      console.error('Error generando ICS:', error);
-      return res.status(500).send('Error al generar el calendario.');
-    }
-
-    res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
-    res.setHeader('Content-Disposition', 'inline; filename="calendario.ics"');
-    res.send(value);
-
-  } catch (err) {
-    console.error('Error al consultar TheSportsDB:', err.message);
-    res.status(500).send('Error al consultar los datos del partido.');
+async function enviarMensajeTelegram(texto) {
+  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
+    console.error('Error: Faltan las variables de entorno TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID');
+    return;
   }
-});
 
-app.listen(PORT, () => {
-  console.log(`Servidor activo en el puerto ${PORT}`);
-});
+  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
+  try {
+    await axios.post(url, {
+      chat_id: TELEGRAM_CHAT_ID,
+      text: texto,
+      parse_mode: 'HTML'
+    });
+    console.log('Notificación enviada a Telegram con éxito.');
+  } catch (error) {
+    console.error('Error al enviar mensaje a Telegram:', error.response ? error.response.data : error.message);
+  }
+}
+
+async function verificarPartidoHoy() {
+  console.log('Consultando calendario de ESPN...');
+  try {
+    const { data } = await axios.get(ESPN_URL, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      }
+    });
+
+    const $ = cheerio.load(data);
+    let partidoDetectado = false;
+
+    // Recorremos todas las filas de las tablas de ESPN
+    $('tr').each((index, element) => {
+      const textoFila = $(element).text().replace(/\s+/g, ' ').trim();
+
+      // Buscamos si la fila menciona el Gran Parque Central o Parque Central
+      const tieneParque = /Gran Parque Central|Parque Central/i.test(textoFila);
+      const esLocal = textoFila.includes('Nacional') && (textoFila.includes(' v ') || textoFila.includes(' vs '));
+
+      if (tieneParque && esLocal) {
+        const hoy = new Date().toLocaleDateString('es-UY', { timeZone: 'America/Montevideo' });
+
+        const mensaje = 
+          `<b>¡HOY JUEGA NACIONAL EN EL PARQUE!</b> 🔵⚪🔴\n\n` +
+          `📅 <b>Fecha:</b> ${hoy}\n` +
+          `🏟️ <b>Estadio:</b> Gran Parque Central\n` +
+          `⚽ Revisa la fijación de horario para la partida.`;
+
+        enviarMensajeTelegram(mensaje);
+        partidoDetectado = true;
+        return false; // Detiene el bucle en el primer partido encontrado
+      }
+    });
+
+    if (!partidoDetectado) {
+      console.log('Hoy no se detectó partido de Nacional en el Gran Parque Central.');
+    }
+
+  } catch (error) {
+    console.error('Error al acceder a ESPN:', error.message);
+  }
+}
+
+verificarPartidoHoy();
+
