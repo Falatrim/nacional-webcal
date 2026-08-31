@@ -27,7 +27,7 @@ async function enviarMensajeTelegram(texto) {
   }
 }
 
-// 1. Consulta en ESPN (Localía por posición "Nacional v Rival")
+// 1. Consulta en ESPN
 async function consultarESPN() {
   console.log('Consultando ESPN...');
   const { data } = await axios.get(ESPN_URL, {
@@ -70,7 +70,7 @@ async function consultarESPN() {
   return partidoDetectado;
 }
 
-// 2. Consulta en sitio oficial de Nacional (Filtrado por fecha de hoy + posición en la tarjeta)
+// 2. Consulta en sitio oficial de Nacional
 async function consultarNacionalOficial() {
   console.log('Consultando sitio oficial de Nacional con Puppeteer...');
   let browser;
@@ -142,20 +142,39 @@ async function consultarNacionalOficial() {
   }
 }
 
+// Función de ejecución principal con captura total de errores
 async function ejecutar() {
+  let errorESPN = null;
+  let errorOficial = null;
+
+  // Intento 1: ESPN
   try {
     const detectadoESPN = await consultarESPN();
-    if (!detectadoESPN) {
-      console.log('No se detectó partido local en ESPN para hoy. Verificando sitio oficial...');
-      await consultarNacionalOficial();
-    }
-  } catch (error) {
-    console.error('Error en ESPN:', error.message);
-    try {
-      await consultarNacionalOficial();
-    } catch (errOficial) {
-      console.error('Error en sitio oficial:', errOficial.message);
-    }
+    if (detectadoESPN) return;
+  } catch (err) {
+    errorESPN = err.message;
+    console.error('Falla en ESPN:', errorESPN);
+  }
+
+  // Intento 2: Sitio Oficial
+  try {
+    const detectadoOficial = await consultarNacionalOficial();
+    if (detectadoOficial) return;
+  } catch (err) {
+    errorOficial = err.message;
+    console.error('Falla en Sitio Oficial:', errorOficial);
+  }
+
+  // Si ambos métodos dieron error de conexión/código, notifica la falla técnica por Telegram
+  if (errorESPN && errorOficial) {
+    const mensajeError = 
+      `⚠️ <b>ALERTA TÉCNICA - BOT NACIONAL</b>\n\n` +
+      `No se pudo verificar la agenda de partidos de hoy debido a errores en ambas fuentes:\n` +
+      `• <b>ESPN:</b> ${errorESPN}\n` +
+      `• <b>Sitio Oficial:</b> ${errorOficial}\n\n` +
+      `<i>Revisar manualmente si hay partido en el Parque Central hoy.</i>`;
+
+    await enviarMensajeTelegram(mensajeError);
   }
 }
 
