@@ -18,7 +18,7 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Instalar Puppeteer y dependencias de Chrome
+      - name: Instalar dependencias y ejecutable de Chrome
         run: |
           npm install
           npx puppeteer browsers install chrome
