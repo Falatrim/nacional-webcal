@@ -9,7 +9,10 @@ const ESPN_URL = 'https://www.espn.com.uy/futbol/equipo/calendario/_/id/2684/nac
 const NACIONAL_CALENDARIO_URL = 'https://nacional.uy/futbol/primer-equipo/calendario';
 
 async function enviarMensajeTelegram(texto) {
-  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
+  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
+    console.error('Error: Faltan variables de entorno TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID');
+    return;
+  }
 
   const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
   try {
@@ -24,7 +27,7 @@ async function enviarMensajeTelegram(texto) {
   }
 }
 
-// 1. Consulta en ESPN (Por posición: "Nacional v Rival")
+// 1. Consulta en ESPN (Localía por posición "Nacional v Rival")
 async function consultarESPN() {
   console.log('Consultando ESPN...');
   const { data } = await axios.get(ESPN_URL, {
@@ -34,18 +37,13 @@ async function consultarESPN() {
 
   const $ = cheerio.load(data);
   let partidoDetectado = false;
-
-  // Fecha de hoy para comparar (ejemplo: "31/8" o según formato de fecha en la tabla)
   const hoy = new Date().toLocaleDateString('es-UY', { timeZone: 'America/Montevideo' });
 
   $('tr').each((index, element) => {
     const textoFila = $(element).text().replace(/\s+/g, ' ').trim();
-
-    // Verificamos que la fila contenga la condición de LOCAL: "Nacional v " o "Nacional vs "
     const esLocal = /Nacional\s+(v|vs)\s+/i.test(textoFila);
 
     if (esLocal) {
-      // Extraer la hora de la celda correspondiente
       const celdas = $(element).find('td');
       let horaPartido = 'Hora a confirmar';
 
@@ -65,21 +63,29 @@ async function consultarESPN() {
 
       enviarMensajeTelegram(mensaje);
       partidoDetectado = true;
-      return false; // Corta el bucle
+      return false;
     }
   });
 
   return partidoDetectado;
 }
 
-// 2. Consulta en Web Oficial (Por posición en la tarjeta de HOY)
+// 2. Consulta en sitio oficial de Nacional (Filtrado por fecha de hoy + posición en la tarjeta)
 async function consultarNacionalOficial() {
   console.log('Consultando sitio oficial de Nacional con Puppeteer...');
   let browser;
   try {
     browser = await puppeteer.launch({
       headless: 'new',
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas',
+        '--no-first-run',
+        '--no-zygote',
+        '--disable-gpu'
+      ]
     });
 
     const page = await browser.newPage();
@@ -96,13 +102,11 @@ async function consultarNacionalOficial() {
         const lineas = tarjeta.innerText ? tarjeta.innerText.split('\n').map(l => l.trim()).filter(Boolean) : [];
         if (lineas.length < 3) continue;
 
-        // Validar fecha de la tarjeta
         const fechaTarjeta = lineas[0].toLowerCase().replace(/\bde\b/g, '').replace(/\s+/g, ' ').trim();
         const hoyLimpio = hoyTexto.replace(/\bde\b/g, '').replace(/\s+/g, ' ').trim();
 
         if (!fechaTarjeta.includes(hoyLimpio)) continue;
 
-        // Buscar línea con hora o marcador (- : -)
         const idxHora = lineas.findIndex(l => /\d{1,2}\s*:\s*\d{2}/.test(l) || l.includes('- : -'));
 
         if (idxHora !== -1) {
