@@ -25,7 +25,7 @@ async function enviarMensajeTelegram(texto) {
   }
 }
 
-// 1. Consulta en ESPN
+// 1. Consulta ESPN (Validando Día + Mes)
 async function consultarESPN() {
   console.log('Consultando ESPN...');
   const { data } = await axios.get(ESPN_URL, {
@@ -38,17 +38,21 @@ async function consultarESPN() {
 
   const hoyObj = new Date();
   const diaNum = hoyObj.getDate();
+  const mesesEspn = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+  const mesTexto = mesesEspn[hoyObj.getMonth()];
 
   $('tr').each((_, element) => {
     const textoFila = $(element).text().replace(/\s+/g, ' ').trim();
-    const coincideDia = new RegExp(`\\b${diaNum}\\b`).test(textoFila);
+    
+    // Valida que la fila tenga el día exacto Y el mes corto correspondiente
+    const coincideDia = new RegExp(`\\b${diaNum}\\b`, 'i').test(textoFila);
+    const coincideMes = new RegExp(`\\b${mesTexto}\\b`, 'i').test(textoFila);
     const esLocal = /\bNAC\b.*?\bv\b/i.test(textoFila);
 
-    if (coincideDia && esLocal) {
+    if (coincideDia && coincideMes && esLocal) {
       const matchHora = textoFila.match(/(\d{1,2}:\d{2}\s*(?:AM|PM)?)/i);
       const horaPartido = matchHora ? matchHora[1].replace(/\s+/g, ' ').trim() : '16:30 hs';
 
-      // Extraer nombre de la competición si está disponible en la fila
       const celdas = $(element).find('td');
       const torneoStr = celdas.length >= 4 ? $(celdas[celdas.length - 1]).text().trim() : 'Liga AUF Uruguaya';
 
@@ -70,7 +74,7 @@ async function consultarESPN() {
   return partidoDetectado;
 }
 
-// 2. Consulta en Sitio Oficial de Nacional
+// 2. Consulta Sitio Oficial de Nacional (Validando Día + Mes)
 async function consultarNacionalOficial() {
   console.log('Consultando sitio oficial de Nacional...');
   let browser;
@@ -85,22 +89,26 @@ async function consultarNacionalOficial() {
 
     const hoyObj = new Date();
     const diaNum = String(hoyObj.getDate()).padStart(2, '0');
+    const mesesOficial = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+    const mesNombre = mesesOficial[hoyObj.getMonth()];
 
-    const partidoDeHoy = await page.evaluate((diaNum) => {
+    const partidoDeHoy = await page.evaluate((diaNum, mesNombre) => {
       const textoPagina = document.body.innerText || '';
 
-      const tieneFechaHoy = textoPagina.includes(`${diaNum} Septiembre`) || textoPagina.includes(`${diaNum}/`) || textoPagina.toLowerCase().includes('domingo, 06');
+      const tieneFechaHoy = textoPagina.toLowerCase().includes(`${diaNum} ${mesNombre.toLowerCase()}`) || 
+                             textoPagina.includes(`${diaNum}/`) || 
+                             textoPagina.toLowerCase().includes(mesNombre.toLowerCase());
+                             
       const esEnElParque = textoPagina.toUpperCase().includes('GRAN PARQUE CENTRAL');
 
       if (tieneFechaHoy && esEnElParque) {
-        // Extraer hora limpia
+        // Limpieza estricta de saltos de línea en la hora
         const matchHora = textoPagina.match(/\d{1,2}[\s\n]*:[\s\n]*\d{2}/);
         let horaStr = '16:30';
         if (matchHora) {
           horaStr = matchHora[0].replace(/[\r\n\s]+/g, '');
         }
 
-        // Extraer torneo si figura en la pantalla
         let torneo = 'Liga AUF Uruguaya';
         if (textoPagina.toLowerCase().includes('torneo clausura')) {
           torneo = 'Liga AUF Uruguaya - Torneo Clausura';
@@ -112,7 +120,7 @@ async function consultarNacionalOficial() {
       }
 
       return null;
-    }, diaNum);
+    }, diaNum, mesNombre);
 
     if (partidoDeHoy && partidoDeHoy.esLocal) {
       const mensaje = 
