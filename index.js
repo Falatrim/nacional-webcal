@@ -5,8 +5,8 @@ const puppeteer = require('puppeteer');
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-const ESPN_URL = 'https://www.espn.com.uy/futbol/equipo/calendario/_/id/2684/nacional';
 const NACIONAL_CALENDARIO_URL = 'https://nacional.uy/futbol/primer-equipo/calendario';
+const ESPN_URL = 'https://www.espn.com.uy/futbol/equipo/calendario/_/id/2684/nacional';
 
 async function enviarMensajeTelegram(texto) {
   if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
@@ -25,58 +25,9 @@ async function enviarMensajeTelegram(texto) {
   }
 }
 
-// 1. Consulta ESPN (Validando Día + Mes)
-async function consultarESPN() {
-  console.log('Consultando ESPN...');
-  const { data } = await axios.get(ESPN_URL, {
-    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-    timeout: 10000
-  });
-
-  const $ = cheerio.load(data);
-  let partidoDetectado = false;
-
-  const hoyObj = new Date();
-  const diaNum = hoyObj.getDate();
-  const mesesEspn = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
-  const mesTexto = mesesEspn[hoyObj.getMonth()];
-
-  $('tr').each((_, element) => {
-    const textoFila = $(element).text().replace(/\s+/g, ' ').trim();
-    
-    // Valida que la fila tenga el día exacto Y el mes corto correspondiente
-    const coincideDia = new RegExp(`\\b${diaNum}\\b`, 'i').test(textoFila);
-    const coincideMes = new RegExp(`\\b${mesTexto}\\b`, 'i').test(textoFila);
-    const esLocal = /\bNAC\b.*?\bv\b/i.test(textoFila);
-
-    if (coincideDia && coincideMes && esLocal) {
-      const matchHora = textoFila.match(/(\d{1,2}:\d{2}\s*(?:AM|PM)?)/i);
-      const horaPartido = matchHora ? matchHora[1].replace(/\s+/g, ' ').trim() : '16:30 hs';
-
-      const celdas = $(element).find('td');
-      const torneoStr = celdas.length >= 4 ? $(celdas[celdas.length - 1]).text().trim() : 'Liga AUF Uruguaya';
-
-      const mensaje = 
-        `🚨 <b>ALERTA DE TRÁFICO Y ZONA: PARTIDO EN EL PARQUE</b>\n\n` +
-        `📅 <b>Fecha:</b> Hoy\n` +
-        `⏰ <b>Hora fijada:</b> ${horaPartido}\n` +
-        `🏆 <b>Torneo:</b> ${torneoStr}\n` +
-        `🏟️ <b>Lugar:</b> Gran Parque Central\n` +
-        `📌 <b>Fuente:</b> ESPN\n\n` +
-        `⚠️ <i>Tomar precauciones por cortes de calle, desvíos de ómnibus y congestión en La Blanqueada.</i>`;
-
-      enviarMensajeTelegram(mensaje);
-      partidoDetectado = true;
-      return false;
-    }
-  });
-
-  return partidoDetectado;
-}
-
-// 2. Consulta Sitio Oficial de Nacional (Validando Día + Mes)
+// 1. Consulta Sitio Oficial de Nacional (PLAN A)
 async function consultarNacionalOficial() {
-  console.log('Consultando sitio oficial de Nacional...');
+  console.log('Consultando sitio oficial de Nacional (Plan A)...');
   let browser;
   try {
     browser = await puppeteer.launch({
@@ -95,28 +46,34 @@ async function consultarNacionalOficial() {
     const partidoDeHoy = await page.evaluate((diaNum, mesNombre) => {
       const textoPagina = document.body.innerText || '';
 
+      // Verifica si la tarjeta de arriba contiene el día y el mes de hoy
       const tieneFechaHoy = textoPagina.toLowerCase().includes(`${diaNum} ${mesNombre.toLowerCase()}`) || 
-                             textoPagina.includes(`${diaNum}/`) || 
-                             textoPagina.toLowerCase().includes(mesNombre.toLowerCase());
+                             textoPagina.includes(`${diaNum}/`);
                              
       const esEnElParque = textoPagina.toUpperCase().includes('GRAN PARQUE CENTRAL');
 
       if (tieneFechaHoy && esEnElParque) {
-        // Limpieza estricta de saltos de línea en la hora
+        // 1. Extraer Hora limpia
         const matchHora = textoPagina.match(/\d{1,2}[\s\n]*:[\s\n]*\d{2}/);
-        let horaStr = '16:30';
+        let horaStr = 'A confirmar';
         if (matchHora) {
           horaStr = matchHora[0].replace(/[\r\n\s]+/g, '');
         }
 
-        let torneo = 'Liga AUF Uruguaya';
-        if (textoPagina.toLowerCase().includes('torneo clausura')) {
-          torneo = 'Liga AUF Uruguaya - Torneo Clausura';
-        } else if (textoPagina.toLowerCase().includes('copa libertadores')) {
-          torneo = 'Copa Libertadores';
+        // 2. Extraer Torneo dinámicamente desde el texto de la tarjeta
+        let torneoStr = 'A confirmar / Desconocido';
+        const lineas = textoPagina.split('\n').map(l => l.trim()).filter(Boolean);
+        
+        // Busca la línea que contiene "Liga", "Copa" o "Torneo" en el encabezado
+        const lineaTorneo = lineas.find(l => 
+          /liga|copa|torneo|campeonato/i.test(l) && !l.toLowerCase().includes('todos los')
+        );
+
+        if (lineaTorneo) {
+          torneoStr = lineaTorneo;
         }
 
-        return { esLocal: true, hora: horaStr, torneo };
+        return { esLocal: true, hora: horaStr, torneo: torneoStr };
       }
 
       return null;
@@ -143,28 +100,83 @@ async function consultarNacionalOficial() {
   }
 }
 
+// 2. Consulta ESPN (PLAN B - Alternativa)
+async function consultarESPN() {
+  console.log('Consultando ESPN (Plan B)...');
+  const { data } = await axios.get(ESPN_URL, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+    timeout: 10000
+  });
+
+  const $ = cheerio.load(data);
+  let partidoDetectado = false;
+
+  const hoyObj = new Date();
+  const diaNum = hoyObj.getDate();
+  const mesesEspn = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+  const mesTexto = mesesEspn[hoyObj.getMonth()];
+
+  $('tr').each((_, element) => {
+    const textoFila = $(element).text().replace(/\./g, '').replace(/\s+/g, ' ').toLowerCase().trim();
+    
+    const coincideDia = new RegExp(`\\b${diaNum}\\b`).test(textoFila);
+    const coincideMes = new RegExp(`\\b${mesTexto}\\b`).test(textoFila);
+    const esLocal = /\bnac\b.*?\bv\b/.test(textoFila);
+
+    if (coincideDia && coincideMes && esLocal) {
+      const matchHora = textoFila.match(/(\d{1,2}:\d{2}\s*(?:am|pm)?)/);
+      const horaPartido = matchHora ? matchHora[1].toUpperCase().trim() : 'A confirmar';
+
+      const celdas = $(element).find('td');
+      let torneoStr = 'A confirmar / Desconocido';
+      if (celdas.length >= 4) {
+        const txtCelda = $(celdas[celdas.length - 1]).text().trim();
+        if (txtCelda) torneoStr = txtCelda;
+      }
+
+      const mensaje = 
+        `🚨 <b>ALERTA DE TRÁFICO Y ZONA: PARTIDO EN EL PARQUE</b>\n\n` +
+        `📅 <b>Fecha:</b> Hoy\n` +
+        `⏰ <b>Hora fijada:</b> ${horaPartido}\n` +
+        `🏆 <b>Torneo:</b> ${torneoStr}\n` +
+        `🏟️ <b>Lugar:</b> Gran Parque Central\n` +
+        `📌 <b>Fuente:</b> ESPN\n\n` +
+        `⚠️ <i>Tomar precauciones por cortes de calle, desvíos de ómnibus y congestión en La Blanqueada.</i>`;
+
+      enviarMensajeTelegram(mensaje);
+      partidoDetectado = true;
+      return false;
+    }
+  });
+
+  return partidoDetectado;
+}
+
 async function ejecutar() {
-  let errorESPN = null;
   let errorOficial = null;
+  let errorESPN = null;
 
-  try {
-    if (await consultarESPN()) return;
-  } catch (err) {
-    errorESPN = err.message;
-  }
-
+  // Intenta primero con la Web Oficial
   try {
     if (await consultarNacionalOficial()) return;
   } catch (err) {
     errorOficial = err.message;
   }
 
-  if (errorESPN && errorOficial) {
+  // Si la Web Oficial no devuelve partido o falla, intenta con ESPN
+  try {
+    if (await consultarESPN()) return;
+  } catch (err) {
+    errorESPN = err.message;
+  }
+
+  // Reporta error técnico únicamente si ambas fuentes fallaron
+  if (errorOficial && errorESPN) {
     await enviarMensajeTelegram(
       `⚠️ <b>ALERTA TÉCNICA - BOT NACIONAL</b>\n\n` +
-      `No se pudo consultar la información:\n` +
-      `• ESPN: ${errorESPN}\n` +
-      `• Web Oficial: ${errorOficial}`
+      `No se pudo consultar la información en ninguna fuente:\n` +
+      `• Web Oficial: ${errorOficial}\n` +
+      `• ESPN: ${errorESPN}`
     );
   }
 }
