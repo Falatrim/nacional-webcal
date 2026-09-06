@@ -1,5 +1,5 @@
 const axios = require('axios');
-const cheerio = require('cheerio');
+const puppeteer = require('puppeteer');
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
@@ -24,79 +24,89 @@ async function enviarMensajeTelegram(texto) {
 }
 
 function obtenerFechaTexto() {
-  const hoy = new Date();
-  const dia = String(hoy.getDate()).padStart(2, '0');
-  const mes = String(hoy.getMonth() + 1).padStart(2, '0');
+  const hoyUruguay = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Montevideo" }));
+  const dia = String(hoyUruguay.getDate()).padStart(2, '0');
+  const mes = String(hoyUruguay.getMonth() + 1).padStart(2, '0');
   return `Hoy (${dia}/${mes})`;
 }
 
 async function probarSoloESPN() {
-  console.log('--- INICIANDO PRUEBA EXCLUSIVA DE ESPN ---');
-  
+  console.log('--- INICIANDO PRUEBA EXCLUSIVA DE ESPN CON PUPPETEER ---');
+  let browser;
+
   try {
-    const { data } = await axios.get(ESPN_URL, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-      timeout: 10000
+    browser = await puppeteer.launch({
+      headless: 'new',
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
     });
 
-    const $ = cheerio.load(data);
-    let partidoDetectado = false;
+    const page = await browser.newPage();
+    
+    // Forzar la zona horaria de Montevideo en el navegador
+    await page.emulateTimezone('America/Montevideo');
 
-    const hoyObj = new Date();
-    const diaNum = hoyObj.getDate();
+    await page.goto(ESPN_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+
+    const hoyUruguay = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Montevideo" }));
+    const diaNum = hoyUruguay.getDate();
     const mesesEspn = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
-    const mesTexto = mesesEspn[hoyObj.getMonth()];
+    const mesTexto = mesesEspn[hoyUruguay.getMonth()];
 
-    console.log(`Buscando fecha objetivo: Día [${diaNum}] y Mes [${mesTexto}]`);
+    console.log(`Buscando en el DOM renderizado: Día [${diaNum}] y Mes [${mesTexto}]`);
 
-    $('tr').each((i, element) => {
-      const textoFilaOriginal = $(element).text();
-      const textoFila = textoFilaOriginal.replace(/\./g, '').replace(/\s+/g, ' ').toLowerCase().trim();
+    const partidoDetectado = await page.evaluate((diaNum, mesTexto) => {
+      const filas = Array.from(document.querySelectorAll('tr'));
+      
+      for (const fila of filas) {
+        const textoFilaOriginal = fila.innerText || '';
+        const textoFila = textoFilaOriginal.replace(/\./g, '').replace(/\s+/g, ' ').toLowerCase().trim();
 
-      if (!textoFila) return;
+        if (!textoFila) continue;
 
-      const coincideDia = new RegExp(`\\b${diaNum}\\b`).test(textoFila);
-      const coincideMes = new RegExp(`\\b${mesTexto}\\b`).test(textoFila);
-      const esLocal = /\bnac\b.*?\bv\b/.test(textoFila);
+        // Evalúa coincidencia de día, mes y localía (NAC v ...)
+        const coincideDia = new RegExp(`\\b${diaNum}\\b`).test(textoFila);
+        const coincideMes = new RegExp(`\\b${mesTexto}\\b`).test(textoFila);
+        const esLocal = /\bnac\b.*?\bv\b/.test(textoFila);
 
-      if (coincideDia && coincideMes) {
-        console.log(`Fila encontrada para hoy (${diaNum} ${mesTexto}): "${textoFila}"`);
-        console.log(`¿Es local (NAC vs ...)? ${esLocal ? 'SÍ' : 'NO'}`);
-
-        if (esLocal) {
+        if (coincideDia && coincideMes && esLocal) {
           const matchHora = textoFila.match(/(\d{1,2}:\d{2}\s*(?:am|pm)?)/);
           const horaPartido = matchHora ? matchHora[1].toUpperCase().trim() : 'A confirmar';
 
-          const celdas = $(element).find('td');
+          const celdas = fila.querySelectorAll('td');
           let torneoStr = 'A confirmar / Desconocido';
           if (celdas.length >= 4) {
-            const txtCelda = $(celdas[celdas.length - 1]).text().trim();
+            const txtCelda = celdas[celdas.length - 1].innerText.trim();
             if (txtCelda) torneoStr = txtCelda;
           }
 
-          const fechaTexto = obtenerFechaTexto();
-          const mensaje = 
-            `🚨 <b>PRUEBA ESPN: ALERTA DE TRÁFICO Y ZONA</b>\n\n` +
-            `📅 <b>Fecha:</b> ${fechaTexto}\n` +
-            `⏰ <b>Hora fijada:</b> ${horaPartido}\n` +
-            `🏆 <b>Torneo:</b> ${torneoStr}\n` +
-            `🏟️ <b>Lugar:</b> Gran Parque Central\n` +
-            `📌 <b>Fuente:</b> ESPN (Prueba Ailada)\n\n` +
-            `⚠️ <i>Tomar precauciones por cortes de calle, desvíos de ómnibus y congestión en La Blanqueada.</i>`;
-
-          enviarMensajeTelegram(mensaje);
-          partidoDetectado = true;
-          return false; // Detiene el bucle
+          return { esLocal: true, hora: horaPartido, torneo: torneoStr };
         }
       }
-    });
 
-    if (!partidoDetectado) {
-      console.log('No se detectó ningún partido de Nacional como local para el día de hoy en ESPN.');
+      return null;
+    }, diaNum, mesTexto);
+
+    if (partidoDetectado && partidoDetectado.esLocal) {
+      console.log('¡Partido detectado en ESPN!');
+      const fechaTexto = obtenerFechaTexto();
+      const mensaje = 
+        `🚨 <b>PRUEBA ESPN: ALERTA DE TRÁFICO Y ZONA</b>\n\n` +
+        `📅 <b>Fecha:</b> ${fechaTexto}\n` +
+        `⏰ <b>Hora fijada:</b> ${partidoDetectado.hora}\n` +
+        `🏆 <b>Torneo:</b> ${partidoDetectado.torneo}\n` +
+        `🏟️ <b>Lugar:</b> Gran Parque Central\n` +
+        `📌 <b>Fuente:</b> ESPN (Prueba con Puppeteer)\n\n` +
+        `⚠️ <i>Tomar precauciones por cortes de calle, desvíos de ómnibus y congestión en La Blanqueada.</i>`;
+
+      await enviarMensajeTelegram(mensaje);
+    } else {
+      console.log('No se detectó ningún partido de Nacional como local para hoy en la tabla renderizada de ESPN.');
     }
 
   } catch (error) {
-    console.error('Error al consultar ESPN:', error.message);
+    console.error('Error durante la prueba de ESPN:', error.message);
+  } finally {
+    if (browser) await browser.close();
   }
 }
 
