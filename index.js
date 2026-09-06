@@ -51,23 +51,24 @@ async function probarSoloESPN() {
         const textoOriginal = fila.innerText || '';
         const txt = textoOriginal.replace(/\s+/g, ' ').trim();
 
-        // Regex para validar:
-        // 1. Contiene el día de hoy precedido de espacio/punto (ej: "Sep. 6" o " 6 ")
-        // 2. Nacional juega de local (Nacional aparece ANTES de la 'v' o 'vs')
         const coincideDia = new RegExp(`\\b${diaNum}\\b`).test(txt);
         const esLocal = /Nacional\s+v\s+/i.test(txt);
 
         if (coincideDia && esLocal) {
-          // Extrae hora (ej: "4:30 PM" o "16:30")
+          // Extrae hora
           const matchHora = txt.match(/(\d{1,2}:\d{2}\s*(?:AM|PM)?)/i);
           const horaStr = matchHora ? matchHora[1].toUpperCase() : 'A confirmar';
 
-          // Extrae el Torneo directamente de las celdas de la tabla
-          const celdas = fila.querySelectorAll('td');
+          // Extrae el Torneo correctamente buscando en la fila completa
           let torneoStr = 'A confirmar / Desconocido';
-          if (celdas.length >= 4) {
-            const txtTorneo = celdas[celdas.length - 1].innerText.trim();
-            if (txtTorneo) torneoStr = txtTorneo;
+          const celdas = Array.from(fila.querySelectorAll('td'));
+          
+          if (celdas.length > 0) {
+            // Toma la última celda que tenga texto no vacío
+            const textosCeldas = celdas.map(c => c.innerText.trim()).filter(Boolean);
+            if (textosCeldas.length > 0) {
+              torneoStr = textosCeldas[textosCeldas.length - 1];
+            }
           }
 
           return { hora: horaStr, torneo: torneoStr };
@@ -80,12 +81,12 @@ async function probarSoloESPN() {
       console.log('¡Partido de hoy en ESPN encontrado con éxito!');
       const fechaTexto = obtenerFechaTexto();
       const mensaje = 
-        `🚨 <b>PRUEBA ESPN: ALERTA DE TRÁFICO Y ZONA</b>\n\n` +
+        `🚨 <b>ALERTA DE TRÁFICO Y ZONA: PARTIDO EN EL PARQUE</b>\n\n` +
         `📅 <b>Fecha:</b> ${fechaTexto}\n` +
         `⏰ <b>Hora fijada:</b> ${partidoDetectado.hora}\n` +
         `🏆 <b>Torneo:</b> ${partidoDetectado.torneo}\n` +
         `🏟️ <b>Lugar:</b> Gran Parque Central\n` +
-        `📌 <b>Fuente:</b> ESPN (Puppeteer)\n\n` +
+        `📌 <b>Fuente:</b> ESPN\n\n` +
         `⚠️ <i>Tomar precauciones por cortes de calle, desvíos de ómnibus y congestión en La Blanqueada.</i>`;
 
       await enviarMensajeTelegram(mensaje);
