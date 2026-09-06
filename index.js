@@ -25,6 +25,14 @@ async function enviarMensajeTelegram(texto) {
   }
 }
 
+// Helper para obtener la fecha de hoy formateada como (DD/MM)
+function obtenerFechaTexto() {
+  const hoy = new Date();
+  const dia = String(hoy.getDate()).padStart(2, '0');
+  const mes = String(hoy.getMonth() + 1).padStart(2, '0');
+  return `Hoy (${dia}/${mes})`;
+}
+
 // 1. Consulta Sitio Oficial de Nacional (PLAN A)
 async function consultarNacionalOficial() {
   console.log('Consultando sitio oficial de Nacional (Plan A)...');
@@ -46,25 +54,23 @@ async function consultarNacionalOficial() {
     const partidoDeHoy = await page.evaluate((diaNum, mesNombre) => {
       const textoPagina = document.body.innerText || '';
 
-      // Verifica si la tarjeta de arriba contiene el día y el mes de hoy
       const tieneFechaHoy = textoPagina.toLowerCase().includes(`${diaNum} ${mesNombre.toLowerCase()}`) || 
                              textoPagina.includes(`${diaNum}/`);
                              
       const esEnElParque = textoPagina.toUpperCase().includes('GRAN PARQUE CENTRAL');
 
       if (tieneFechaHoy && esEnElParque) {
-        // 1. Extraer Hora limpia
+        // Extraer Hora limpia
         const matchHora = textoPagina.match(/\d{1,2}[\s\n]*:[\s\n]*\d{2}/);
         let horaStr = 'A confirmar';
         if (matchHora) {
           horaStr = matchHora[0].replace(/[\r\n\s]+/g, '');
         }
 
-        // 2. Extraer Torneo dinámicamente desde el texto de la tarjeta
+        // Extraer Torneo dinámicamente
         let torneoStr = 'A confirmar / Desconocido';
         const lineas = textoPagina.split('\n').map(l => l.trim()).filter(Boolean);
         
-        // Busca la línea que contiene "Liga", "Copa" o "Torneo" en el encabezado
         const lineaTorneo = lineas.find(l => 
           /liga|copa|torneo|campeonato/i.test(l) && !l.toLowerCase().includes('todos los')
         );
@@ -80,9 +86,10 @@ async function consultarNacionalOficial() {
     }, diaNum, mesNombre);
 
     if (partidoDeHoy && partidoDeHoy.esLocal) {
+      const fechaTexto = obtenerFechaTexto();
       const mensaje = 
         `🚨 <b>ALERTA DE TRÁFICO Y ZONA: PARTIDO EN EL PARQUE</b>\n\n` +
-        `📅 <b>Fecha:</b> Hoy\n` +
+        `📅 <b>Fecha:</b> ${fechaTexto}\n` +
         `⏰ <b>Hora fijada:</b> ${partidoDeHoy.hora} hs\n` +
         `🏆 <b>Torneo:</b> ${partidoDeHoy.torneo}\n` +
         `🏟️ <b>Lugar:</b> Gran Parque Central\n` +
@@ -134,9 +141,10 @@ async function consultarESPN() {
         if (txtCelda) torneoStr = txtCelda;
       }
 
+      const fechaTexto = obtenerFechaTexto();
       const mensaje = 
         `🚨 <b>ALERTA DE TRÁFICO Y ZONA: PARTIDO EN EL PARQUE</b>\n\n` +
-        `📅 <b>Fecha:</b> Hoy\n` +
+        `📅 <b>Fecha:</b> ${fechaTexto}\n` +
         `⏰ <b>Hora fijada:</b> ${horaPartido}\n` +
         `🏆 <b>Torneo:</b> ${torneoStr}\n` +
         `🏟️ <b>Lugar:</b> Gran Parque Central\n` +
@@ -156,21 +164,18 @@ async function ejecutar() {
   let errorOficial = null;
   let errorESPN = null;
 
-  // Intenta primero con la Web Oficial
   try {
     if (await consultarNacionalOficial()) return;
   } catch (err) {
     errorOficial = err.message;
   }
 
-  // Si la Web Oficial no devuelve partido o falla, intenta con ESPN
   try {
     if (await consultarESPN()) return;
   } catch (err) {
     errorESPN = err.message;
   }
 
-  // Reporta error técnico únicamente si ambas fuentes fallaron
   if (errorOficial && errorESPN) {
     await enviarMensajeTelegram(
       `⚠️ <b>ALERTA TÉCNICA - BOT NACIONAL</b>\n\n` +
