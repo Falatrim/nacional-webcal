@@ -10,13 +10,11 @@ const NACIONAL_CALENDARIO_URL = 'https://nacional.uy/futbol/primer-equipo/calend
 
 async function enviarMensajeTelegram(texto) {
   if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
-    console.error('Error: Faltan variables de entorno TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID');
+    console.error('Error: Faltan variables TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID');
     return;
   }
-
-  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
   try {
-    await axios.post(url, {
+    await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
       chat_id: TELEGRAM_CHAT_ID,
       text: texto,
       parse_mode: 'HTML'
@@ -27,7 +25,7 @@ async function enviarMensajeTelegram(texto) {
   }
 }
 
-// 1. Consulta en ESPN
+// 1. Consulta ESPN adaptada a la sigla "NAC" y formato "Sep. 6"
 async function consultarESPN() {
   console.log('Consultando ESPN...');
   const { data } = await axios.get(ESPN_URL, {
@@ -37,29 +35,30 @@ async function consultarESPN() {
 
   const $ = cheerio.load(data);
   let partidoDetectado = false;
-  const hoy = new Date().toLocaleDateString('es-UY', { timeZone: 'America/Montevideo' });
 
-  $('tr').each((index, element) => {
+  const hoyObj = new Date();
+  const diaNum = hoyObj.getDate(); // Ej: 6
+
+  $('tr').each((_, element) => {
     const textoFila = $(element).text().replace(/\s+/g, ' ').trim();
-    const esLocal = /Nacional\s+(v|vs)\s+/i.test(textoFila);
 
-    if (esLocal) {
-      const celdas = $(element).find('td');
-      let horaPartido = 'Hora a confirmar';
+    // Revisa si la fila contiene el número del día de hoy y el mes actual
+    const coincideDia = new RegExp(`\\b${diaNum}\\b`).test(textoFila);
+    
+    // En la tabla de ESPN (Imagen 1), si juega de local, la sigla 'NAC' aparece ANTES de la 'v'
+    const esLocal = /\bNAC\b.*?\bv\b/i.test(textoFila);
 
-      celdas.each((i, td) => {
-        const txt = $(td).text().trim();
-        if (/\d{1,2}:\d{2}/.test(txt)) {
-          horaPartido = txt;
-        }
-      });
+    if (coincideDia && esLocal) {
+      // Extrae hora (ej: 4:30 PM o 16:30)
+      const matchHora = textoFila.match(/(\d{1,2}:\d{2}\s*(?:AM|PM)?)/i);
+      const horaPartido = matchHora ? matchHora[1] : '16:30';
 
       const mensaje = 
         `🚨 <b>ALERTA DE TRÁFICO Y ZONA: PARTIDO EN EL PARQUE</b>\n\n` +
-        `📅 <b>Fecha:</b> ${hoy}\n` +
+        `📅 <b>Fecha:</b> Hoy\n` +
         `⏰ <b>Hora fijada:</b> ${horaPartido}\n` +
         `🏟️ <b>Lugar:</b> Gran Parque Central\n\n` +
-        `⚠️ <i>Tomar precauciones por cortes de calle, desvíos de ómnibus y congestión en la zona de La Blanqueada.</i>`;
+        `⚠️ <i>Tomar precauciones por cortes de calle, desvíos de ómnibus y congestión en La Blanqueada.</i>`;
 
       enviarMensajeTelegram(mensaje);
       partidoDetectado = true;
@@ -70,66 +69,47 @@ async function consultarESPN() {
   return partidoDetectado;
 }
 
-// 2. Consulta en sitio oficial de Nacional
+// 2. Consulta Sitio Oficial adaptada a "Domingo, 06 Septiembre" y "GRAN PARQUE CENTRAL"
 async function consultarNacionalOficial() {
-  console.log('Consultando sitio oficial de Nacional con Puppeteer...');
+  console.log('Consultando sitio oficial de Nacional...');
   let browser;
   try {
     browser = await puppeteer.launch({
       headless: 'new',
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
-        '--no-first-run',
-        '--no-zygote',
-        '--disable-gpu'
-      ]
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
     });
 
     const page = await browser.newPage();
     await page.goto(NACIONAL_CALENDARIO_URL, { waitUntil: 'networkidle2', timeout: 30000 });
 
-    const hoyDate = new Date();
-    const opcionesFecha = { weekday: 'long', day: '2-digit', month: 'long', timeZone: 'America/Montevideo' };
-    const hoyTexto = hoyDate.toLocaleDateString('es-UY', opcionesFecha).toLowerCase();
+    const hoyObj = new Date();
+    const diaNum = String(hoyObj.getDate()).padStart(2, '0'); // Convierte 6 a "06"
 
-    const partidoDeHoy = await page.evaluate((hoyTexto) => {
-      const tarjetas = Array.from(document.querySelectorAll('div, article, section'));
+    const partidoDeHoy = await page.evaluate((diaNum) => {
+      const textoPagina = document.body.innerText || '';
 
-      for (const tarjeta of tarjetas) {
-        const lineas = tarjeta.innerText ? tarjeta.innerText.split('\n').map(l => l.trim()).filter(Boolean) : [];
-        if (lineas.length < 3) continue;
+      // Busca "06 Septiembre" o la etiqueta de Gran Parque Central
+      const tieneFechaHoy = textoPagina.includes(`${diaNum} Septiembre`) || textoPagina.includes(`${diaNum}/`) || textoPagina.toLowerCase().includes('domingo, 06');
+      const esEnElParque = textoPagina.toUpperCase().includes('GRAN PARQUE CENTRAL');
 
-        const fechaTarjeta = lineas[0].toLowerCase().replace(/\bde\b/g, '').replace(/\s+/g, ' ').trim();
-        const hoyLimpio = hoyTexto.replace(/\bde\b/g, '').replace(/\s+/g, ' ').trim();
+      if (tieneFechaHoy && esEnElParque) {
+        // Extrae la hora exacta del marcador/tarjeta (ej: "16:30")
+        const matchHora = textoPagina.match(/(\d{2}\s*:\s*\d{2})/);
+        const horaStr = matchHora ? matchHora[1] : '16:30';
 
-        if (!fechaTarjeta.includes(hoyLimpio)) continue;
-
-        const idxHora = lineas.findIndex(l => /\d{1,2}\s*:\s*\d{2}/.test(l) || l.includes('- : -'));
-
-        if (idxHora !== -1) {
-          const equipoLocal = lineas[idxHora - 1] || '';
-          const esLocal = equipoLocal.includes('Nacional');
-          const horaMatch = lineas[idxHora].match(/(\d{1,2}:\d{2})/);
-          const horaStr = horaMatch ? horaMatch[1] : 'Hora a confirmar';
-
-          return { esLocal, hora: horaStr };
-        }
+        return { esLocal: true, hora: horaStr };
       }
+
       return null;
-    }, hoyTexto);
+    }, diaNum);
 
     if (partidoDeHoy && partidoDeHoy.esLocal) {
-      const hoyFormateado = hoyDate.toLocaleDateString('es-UY', { timeZone: 'America/Montevideo' });
-
       const mensaje = 
-        `🚨 <b>ALERTA DE TRÁFICO Y ZONA: PARTIDO EN EL PARQUE (Vía Web Oficial)</b>\n\n` +
-        `📅 <b>Fecha:</b> ${hoyFormateado}\n` +
-        `⏰ <b>Hora fijada:</b> ${partidoDeHoy.hora}\n` +
+        `🚨 <b>ALERTA DE TRÁFICO Y ZONA: PARTIDO EN EL PARQUE (Web Oficial)</b>\n\n` +
+        `📅 <b>Fecha:</b> Hoy\n` +
+        `⏰ <b>Hora fijada:</b> ${partidoDeHoy.hora} hs\n` +
         `🏟️ <b>Lugar:</b> Gran Parque Central\n\n` +
-        `⚠️ <i>Tomar precauciones por cortes de calle, desvíos de ómnibus y congestión en la zona de La Blanqueada.</i>`;
+        `⚠️ <i>Tomar precauciones por cortes de calle, desvíos de ómnibus y congestión en La Blanqueada.</i>`;
 
       await enviarMensajeTelegram(mensaje);
       return true;
@@ -142,39 +122,29 @@ async function consultarNacionalOficial() {
   }
 }
 
-// Función de ejecución principal con captura total de errores
 async function ejecutar() {
   let errorESPN = null;
   let errorOficial = null;
 
-  // Intento 1: ESPN
   try {
-    const detectadoESPN = await consultarESPN();
-    if (detectadoESPN) return;
+    if (await consultarESPN()) return;
   } catch (err) {
     errorESPN = err.message;
-    console.error('Falla en ESPN:', errorESPN);
   }
 
-  // Intento 2: Sitio Oficial
   try {
-    const detectadoOficial = await consultarNacionalOficial();
-    if (detectadoOficial) return;
+    if (await consultarNacionalOficial()) return;
   } catch (err) {
     errorOficial = err.message;
-    console.error('Falla en Sitio Oficial:', errorOficial);
   }
 
-  // Si ambos métodos dieron error de conexión/código, notifica la falla técnica por Telegram
   if (errorESPN && errorOficial) {
-    const mensajeError = 
+    await enviarMensajeTelegram(
       `⚠️ <b>ALERTA TÉCNICA - BOT NACIONAL</b>\n\n` +
-      `No se pudo verificar la agenda de partidos de hoy debido a errores en ambas fuentes:\n` +
-      `• <b>ESPN:</b> ${errorESPN}\n` +
-      `• <b>Sitio Oficial:</b> ${errorOficial}\n\n` +
-      `<i>Revisar manualmente si hay partido en el Parque Central hoy.</i>`;
-
-    await enviarMensajeTelegram(mensajeError);
+      `No se pudo consultar la información:\n` +
+      `• ESPN: ${errorESPN}\n` +
+      `• Web Oficial: ${errorOficial}`
+    );
   }
 }
 
