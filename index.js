@@ -25,7 +25,7 @@ async function enviarMensajeTelegram(texto) {
   }
 }
 
-// 1. Consulta ESPN adaptada a la sigla "NAC" y formato "Sep. 6"
+// 1. Consulta en ESPN
 async function consultarESPN() {
   console.log('Consultando ESPN...');
   const { data } = await axios.get(ESPN_URL, {
@@ -37,27 +37,28 @@ async function consultarESPN() {
   let partidoDetectado = false;
 
   const hoyObj = new Date();
-  const diaNum = hoyObj.getDate(); // Ej: 6
+  const diaNum = hoyObj.getDate();
 
   $('tr').each((_, element) => {
     const textoFila = $(element).text().replace(/\s+/g, ' ').trim();
-
-    // Revisa si la fila contiene el número del día de hoy y el mes actual
     const coincideDia = new RegExp(`\\b${diaNum}\\b`).test(textoFila);
-    
-    // En la tabla de ESPN (Imagen 1), si juega de local, la sigla 'NAC' aparece ANTES de la 'v'
     const esLocal = /\bNAC\b.*?\bv\b/i.test(textoFila);
 
     if (coincideDia && esLocal) {
-      // Extrae hora (ej: 4:30 PM o 16:30)
       const matchHora = textoFila.match(/(\d{1,2}:\d{2}\s*(?:AM|PM)?)/i);
-      const horaPartido = matchHora ? matchHora[1] : '16:30';
+      const horaPartido = matchHora ? matchHora[1].replace(/\s+/g, ' ').trim() : '16:30 hs';
+
+      // Extraer nombre de la competición si está disponible en la fila
+      const celdas = $(element).find('td');
+      const torneoStr = celdas.length >= 4 ? $(celdas[celdas.length - 1]).text().trim() : 'Liga AUF Uruguaya';
 
       const mensaje = 
         `🚨 <b>ALERTA DE TRÁFICO Y ZONA: PARTIDO EN EL PARQUE</b>\n\n` +
         `📅 <b>Fecha:</b> Hoy\n` +
         `⏰ <b>Hora fijada:</b> ${horaPartido}\n` +
-        `🏟️ <b>Lugar:</b> Gran Parque Central\n\n` +
+        `🏆 <b>Torneo:</b> ${torneoStr}\n` +
+        `🏟️ <b>Lugar:</b> Gran Parque Central\n` +
+        `📌 <b>Fuente:</b> ESPN\n\n` +
         `⚠️ <i>Tomar precauciones por cortes de calle, desvíos de ómnibus y congestión en La Blanqueada.</i>`;
 
       enviarMensajeTelegram(mensaje);
@@ -69,7 +70,7 @@ async function consultarESPN() {
   return partidoDetectado;
 }
 
-// 2. Consulta Sitio Oficial adaptada a "Domingo, 06 Septiembre" y "GRAN PARQUE CENTRAL"
+// 2. Consulta en Sitio Oficial de Nacional
 async function consultarNacionalOficial() {
   console.log('Consultando sitio oficial de Nacional...');
   let browser;
@@ -83,21 +84,31 @@ async function consultarNacionalOficial() {
     await page.goto(NACIONAL_CALENDARIO_URL, { waitUntil: 'networkidle2', timeout: 30000 });
 
     const hoyObj = new Date();
-    const diaNum = String(hoyObj.getDate()).padStart(2, '0'); // Convierte 6 a "06"
+    const diaNum = String(hoyObj.getDate()).padStart(2, '0');
 
     const partidoDeHoy = await page.evaluate((diaNum) => {
       const textoPagina = document.body.innerText || '';
 
-      // Busca "06 Septiembre" o la etiqueta de Gran Parque Central
       const tieneFechaHoy = textoPagina.includes(`${diaNum} Septiembre`) || textoPagina.includes(`${diaNum}/`) || textoPagina.toLowerCase().includes('domingo, 06');
       const esEnElParque = textoPagina.toUpperCase().includes('GRAN PARQUE CENTRAL');
 
       if (tieneFechaHoy && esEnElParque) {
-        // Extrae la hora exacta del marcador/tarjeta (ej: "16:30")
-        const matchHora = textoPagina.match(/(\d{2}\s*:\s*\d{2})/);
-        const horaStr = matchHora ? matchHora[1] : '16:30';
+        // Extraer hora limpia
+        const matchHora = textoPagina.match(/\d{1,2}[\s\n]*:[\s\n]*\d{2}/);
+        let horaStr = '16:30';
+        if (matchHora) {
+          horaStr = matchHora[0].replace(/[\r\n\s]+/g, '');
+        }
 
-        return { esLocal: true, hora: horaStr };
+        // Extraer torneo si figura en la pantalla
+        let torneo = 'Liga AUF Uruguaya';
+        if (textoPagina.toLowerCase().includes('torneo clausura')) {
+          torneo = 'Liga AUF Uruguaya - Torneo Clausura';
+        } else if (textoPagina.toLowerCase().includes('copa libertadores')) {
+          torneo = 'Copa Libertadores';
+        }
+
+        return { esLocal: true, hora: horaStr, torneo };
       }
 
       return null;
@@ -105,10 +116,12 @@ async function consultarNacionalOficial() {
 
     if (partidoDeHoy && partidoDeHoy.esLocal) {
       const mensaje = 
-        `🚨 <b>ALERTA DE TRÁFICO Y ZONA: PARTIDO EN EL PARQUE (Web Oficial)</b>\n\n` +
+        `🚨 <b>ALERTA DE TRÁFICO Y ZONA: PARTIDO EN EL PARQUE</b>\n\n` +
         `📅 <b>Fecha:</b> Hoy\n` +
         `⏰ <b>Hora fijada:</b> ${partidoDeHoy.hora} hs\n` +
-        `🏟️ <b>Lugar:</b> Gran Parque Central\n\n` +
+        `🏆 <b>Torneo:</b> ${partidoDeHoy.torneo}\n` +
+        `🏟️ <b>Lugar:</b> Gran Parque Central\n` +
+        `📌 <b>Fuente:</b> Sitio Oficial (nacional.uy)\n\n` +
         `⚠️ <i>Tomar precauciones por cortes de calle, desvíos de ómnibus y congestión en La Blanqueada.</i>`;
 
       await enviarMensajeTelegram(mensaje);
