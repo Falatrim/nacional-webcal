@@ -7,31 +7,20 @@ const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const ESPN_URL = 'https://www.espn.com.uy/futbol/equipo/calendario/_/id/2684/nacional';
 
 async function enviarMensajeTelegram(texto) {
-  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
-    console.error('Error: Faltan variables TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID');
-    return;
-  }
+  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
   try {
     await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
       chat_id: TELEGRAM_CHAT_ID,
       text: texto,
       parse_mode: 'HTML'
     });
-    console.log('Notificación enviada a Telegram con éxito.');
   } catch (error) {
-    console.error('Error al enviar a Telegram:', error.message);
+    console.error('Error enviando a Telegram:', error.message);
   }
 }
 
-function obtenerFechaTexto() {
-  const hoyUruguay = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Montevideo" }));
-  const dia = String(hoyUruguay.getDate()).padStart(2, '0');
-  const mes = String(hoyUruguay.getMonth() + 1).padStart(2, '0');
-  return `Hoy (${dia}/${mes})`;
-}
-
 async function probarSoloESPN() {
-  console.log('--- INICIANDO PRUEBA EXCLUSIVA DE ESPN CON PUPPETEER ---');
+  console.log('--- INICIANDO DIAGNÓSTICO ESPN CON PUPPETEER ---');
   let browser;
 
   try {
@@ -41,70 +30,67 @@ async function probarSoloESPN() {
     });
 
     const page = await browser.newPage();
-    
-    // Forzar la zona horaria de Montevideo en el navegador
     await page.emulateTimezone('America/Montevideo');
-
     await page.goto(ESPN_URL, { waitUntil: 'networkidle2', timeout: 30000 });
 
     const hoyUruguay = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Montevideo" }));
     const diaNum = hoyUruguay.getDate();
-    const mesesEspn = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
-    const mesTexto = mesesEspn[hoyUruguay.getMonth()];
 
-    console.log(`Buscando en el DOM renderizado: Día [${diaNum}] y Mes [${mesTexto}]`);
+    // Extrae y muestra las primeras 8 filas reales del DOM
+    const filasDOM = await page.evaluate(() => {
+      const filas = Array.from(document.querySelectorAll('tr'));
+      return filas.map(f => f.innerText.replace(/\s+/g, ' ').trim()).filter(Boolean).slice(0, 8);
+    });
 
-    const partidoDetectado = await page.evaluate((diaNum, mesTexto) => {
+    console.log('--- TEXTO REAL EN FILAS DE ESPN ---');
+    filasDOM.forEach((f, idx) => console.log(`Fila ${idx}: "${f}"`));
+
+    // Búsqueda flexible: solo verifica que contenga el día actual y que sea local (NAC)
+    const partidoDetectado = await page.evaluate((diaNum) => {
       const filas = Array.from(document.querySelectorAll('tr'));
       
       for (const fila of filas) {
-        const textoFilaOriginal = fila.innerText || '';
-        const textoFila = textoFilaOriginal.replace(/\./g, '').replace(/\s+/g, ' ').toLowerCase().trim();
+        const txt = (fila.innerText || '').toLowerCase();
+        
+        // Verifica el número de día de hoy y que figure Nacional como local
+        const tieneDia = new RegExp(`\\b${diaNum}\\b`).test(txt);
+        const esLocal = txt.includes('nacional') || txt.includes('nac');
+        const esVs = txt.includes(' v ') || txt.includes(' vs ');
 
-        if (!textoFila) continue;
-
-        // Evalúa coincidencia de día, mes y localía (NAC v ...)
-        const coincideDia = new RegExp(`\\b${diaNum}\\b`).test(textoFila);
-        const coincideMes = new RegExp(`\\b${mesTexto}\\b`).test(textoFila);
-        const esLocal = /\bnac\b.*?\bv\b/.test(textoFila);
-
-        if (coincideDia && coincideMes && esLocal) {
-          const matchHora = textoFila.match(/(\d{1,2}:\d{2}\s*(?:am|pm)?)/);
-          const horaPartido = matchHora ? matchHora[1].toUpperCase().trim() : 'A confirmar';
+        if (tieneDia && esLocal && esVs) {
+          const matchHora = txt.match(/(\d{1,2}:\d{2})/);
+          const horaStr = matchHora ? matchHora[1] : 'A confirmar';
 
           const celdas = fila.querySelectorAll('td');
-          let torneoStr = 'A confirmar / Desconocido';
-          if (celdas.length >= 4) {
-            const txtCelda = celdas[celdas.length - 1].innerText.trim();
-            if (txtCelda) torneoStr = txtCelda;
+          let torneo = 'A confirmar / Desconocido';
+          if (celdas.length >= 3) {
+            torneo = celdas[celdas.length - 1].innerText.trim();
           }
 
-          return { esLocal: true, hora: horaPartido, torneo: torneoStr };
+          return { hora: horaStr, torneo };
         }
       }
-
       return null;
-    }, diaNum, mesTexto);
+    }, diaNum);
 
-    if (partidoDetectado && partidoDetectado.esLocal) {
-      console.log('¡Partido detectado en ESPN!');
-      const fechaTexto = obtenerFechaTexto();
+    if (partidoDetectado) {
+      console.log('¡Coincidencia detectada!');
       const mensaje = 
         `🚨 <b>PRUEBA ESPN: ALERTA DE TRÁFICO Y ZONA</b>\n\n` +
-        `📅 <b>Fecha:</b> ${fechaTexto}\n` +
-        `⏰ <b>Hora fijada:</b> ${partidoDetectado.hora}\n` +
+        `📅 <b>Fecha:</b> Hoy (${diaNum}/09)\n` +
+        `⏰ <b>Hora fijada:</b> ${partidoDetectado.hora} hs\n` +
         `🏆 <b>Torneo:</b> ${partidoDetectado.torneo}\n` +
         `🏟️ <b>Lugar:</b> Gran Parque Central\n` +
-        `📌 <b>Fuente:</b> ESPN (Prueba con Puppeteer)\n\n` +
+        `📌 <b>Fuente:</b> ESPN (Puppeteer)\n\n` +
         `⚠️ <i>Tomar precauciones por cortes de calle, desvíos de ómnibus y congestión en La Blanqueada.</i>`;
 
       await enviarMensajeTelegram(mensaje);
     } else {
-      console.log('No se detectó ningún partido de Nacional como local para hoy en la tabla renderizada de ESPN.');
+      console.log('No se encontró coincidencia tras la lectura flexible.');
     }
 
-  } catch (error) {
-    console.error('Error durante la prueba de ESPN:', error.message);
+  } catch (err) {
+    console.error('Error:', err.message);
   } finally {
     if (browser) await browser.close();
   }
