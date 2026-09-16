@@ -8,32 +8,35 @@ const NACIONAL_CALENDARIO_URL = 'https://nacional.uy/futbol/primer-equipo/calend
 const ESPN_URL = 'https://www.espn.com.uy/futbol/equipo/calendario/_/id/2684/nacional';
 
 async function enviarMensajeTelegram(texto) {
-  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
-    console.error('Error: Faltan variables TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID');
-    return;
-  }
+  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
   try {
     await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
       chat_id: TELEGRAM_CHAT_ID,
       text: texto,
       parse_mode: 'HTML'
     });
-    console.log('Notificación enviada a Telegram con éxito.');
+    console.log('Notificación enviada a Telegram.');
   } catch (error) {
-    console.error('Error al enviar a Telegram:', error.message);
+    console.error('Error enviando a Telegram:', error.message);
   }
 }
 
-function obtenerFechaTexto() {
-  const hoyUruguay = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Montevideo" }));
-  const dia = String(hoyUruguay.getDate()).padStart(2, '0');
-  const mes = String(hoyUruguay.getMonth() + 1).padStart(2, '0');
-  return `Hoy (${dia}/${mes})`;
+// Genera el objeto de fecha para hoy o mañana en Montevideo
+function obtenerFechaUruguay(diasSumados = 0) {
+  const fecha = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Montevideo" }));
+  fecha.setDate(fecha.getDate() + diasSumados);
+  return fecha;
 }
 
-// 1. PLAN A: Sitio Oficial de Nacional
-async function consultarNacionalOficial() {
-  console.log('Consultando sitio oficial de Nacional (Plan A)...');
+function formatearTextoFecha(fecha, esManana) {
+  const dia = String(fecha.getDate()).padStart(2, '0');
+  const mes = String(fecha.getMonth() + 1).padStart(2, '0');
+  const prefijo = esManana ? 'Mañana' : 'Hoy';
+  return `${prefijo} (${dia}/${mes})`;
+}
+
+// 1. PLAN A: Sitio Oficial
+async function consultarNacionalOficial(fechaObjetivo, esManana) {
   let browser;
   try {
     browser = await puppeteer.launch({
@@ -45,20 +48,19 @@ async function consultarNacionalOficial() {
     await page.emulateTimezone('America/Montevideo');
     await page.goto(NACIONAL_CALENDARIO_URL, { waitUntil: 'networkidle2', timeout: 30000 });
 
-    const hoyUruguay = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Montevideo" }));
-    const diaNum = String(hoyUruguay.getDate()).padStart(2, '0');
+    const diaNum = String(fechaObjetivo.getDate()).padStart(2, '0');
     const mesesOficial = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
-    const mesNombre = mesesOficial[hoyUruguay.getMonth()];
+    const mesNombre = mesesOficial[fechaObjetivo.getMonth()];
 
-    const partidoDeHoy = await page.evaluate((diaNum, mesNombre) => {
+    const partidoDetectado = await page.evaluate((diaNum, mesNombre) => {
       const textoPagina = document.body.innerText || '';
 
-      const tieneFechaHoy = textoPagina.toLowerCase().includes(`${diaNum} ${mesNombre.toLowerCase()}`) || 
-                             textoPagina.includes(`${diaNum}/`);
+      const tieneFecha = textoPagina.toLowerCase().includes(`${diaNum} ${mesNombre.toLowerCase()}`) || 
+                         textoPagina.includes(`${diaNum}/`);
                              
       const esEnElParque = textoPagina.toUpperCase().includes('GRAN PARQUE CENTRAL');
 
-      if (tieneFechaHoy && esEnElParque) {
+      if (tieneFecha && esEnElParque) {
         const matchHora = textoPagina.match(/\d{1,2}[\s\n]*:[\s\n]*\d{2}/);
         let horaStr = 'A confirmar';
         if (matchHora) {
@@ -71,9 +73,7 @@ async function consultarNacionalOficial() {
           /liga|copa|torneo|campeonato/i.test(l) && !l.toLowerCase().includes('todos los')
         );
 
-        if (lineaTorneo) {
-          torneoStr = lineaTorneo;
-        }
+        if (lineaTorneo) torneoStr = lineaTorneo;
 
         return { esLocal: true, hora: horaStr, torneo: torneoStr };
       }
@@ -81,13 +81,15 @@ async function consultarNacionalOficial() {
       return null;
     }, diaNum, mesNombre);
 
-    if (partidoDeHoy && partidoDeHoy.esLocal) {
-      const fechaTexto = obtenerFechaTexto();
+    if (partidoDetectado && partidoDetectado.esLocal) {
+      const fechaTexto = formatearTextoFecha(fechaObjetivo, esManana);
+      const tituloHeader = esManana ? 'PARTIDO MAÑANA EN EL PARQUE' : 'PARTIDO HOY EN EL PARQUE';
+      
       const mensaje = 
-        `🚨 <b>ALERTA DE TRÁFICO Y ZONA: PARTIDO EN EL PARQUE</b>\n\n` +
+        `🚨 <b>ALERTA DE TRÁFICO Y ZONA: ${tituloHeader}</b>\n\n` +
         `📅 <b>Fecha:</b> ${fechaTexto}\n` +
-        `⏰ <b>Hora fijada:</b> ${partidoDeHoy.hora} hs\n` +
-        `🏆 <b>Torneo:</b> ${partidoDeHoy.torneo}\n` +
+        `⏰ <b>Hora fijada:</b> ${partidoDetectado.hora} hs\n` +
+        `🏆 <b>Torneo:</b> ${partidoDetectado.torneo}\n` +
         `🏟️ <b>Lugar:</b> Gran Parque Central\n` +
         `📌 <b>Fuente:</b> Sitio Oficial (nacional.uy)\n\n` +
         `⚠️ <i>Tomar precauciones por cortes de calle, desvíos de ómnibus y congestión en La Blanqueada.</i>`;
@@ -97,17 +99,14 @@ async function consultarNacionalOficial() {
     }
 
     return false;
-
   } finally {
     if (browser) await browser.close();
   }
 }
 
-// 2. PLAN B: Respaldo ESPN con Puppeteer
-async function consultarESPN() {
-  console.log('Consultando ESPN (Plan B)...');
+// 2. PLAN B: ESPN
+async function consultarESPN(fechaObjetivo, esManana) {
   let browser;
-
   try {
     browser = await puppeteer.launch({
       headless: 'new',
@@ -118,8 +117,7 @@ async function consultarESPN() {
     await page.emulateTimezone('America/Montevideo');
     await page.goto(ESPN_URL, { waitUntil: 'networkidle2', timeout: 30000 });
 
-    const hoyUruguay = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Montevideo" }));
-    const diaNum = hoyUruguay.getDate();
+    const diaNum = fechaObjetivo.getDate();
 
     const partidoDetectado = await page.evaluate((diaNum) => {
       const filas = Array.from(document.querySelectorAll('tr'));
@@ -137,12 +135,9 @@ async function consultarESPN() {
 
           let torneoStr = 'A confirmar / Desconocido';
           const celdas = Array.from(fila.querySelectorAll('td'));
-          
           if (celdas.length > 0) {
             const textosCeldas = celdas.map(c => c.innerText.trim()).filter(Boolean);
-            if (textosCeldas.length > 0) {
-              torneoStr = textosCeldas[textosCeldas.length - 1];
-            }
+            if (textosCeldas.length > 0) torneoStr = textosCeldas[textosCeldas.length - 1];
           }
 
           return { hora: horaStr, torneo: torneoStr };
@@ -152,9 +147,11 @@ async function consultarESPN() {
     }, diaNum);
 
     if (partidoDetectado) {
-      const fechaTexto = obtenerFechaTexto();
+      const fechaTexto = formatearTextoFecha(fechaObjetivo, esManana);
+      const tituloHeader = esManana ? 'PARTIDO MAÑANA EN EL PARQUE' : 'PARTIDO HOY EN EL PARQUE';
+
       const mensaje = 
-        `🚨 <b>ALERTA DE TRÁFICO Y ZONA: PARTIDO EN EL PARQUE</b>\n\n` +
+        `🚨 <b>ALERTA DE TRÁFICO Y ZONA: ${tituloHeader}</b>\n\n` +
         `📅 <b>Fecha:</b> ${fechaTexto}\n` +
         `⏰ <b>Hora fijada:</b> ${partidoDetectado.hora}\n` +
         `🏆 <b>Torneo:</b> ${partidoDetectado.torneo}\n` +
@@ -167,35 +164,37 @@ async function consultarESPN() {
     }
 
     return false;
-
   } finally {
     if (browser) await browser.close();
   }
 }
 
+async function verificarFecha(fechaObjetivo, esManana) {
+  try {
+    if (await consultarNacionalOficial(fechaObjetivo, esManana)) return true;
+  } catch (e) {
+    console.error(`Error en oficial (${esManana ? 'Mañana' : 'Hoy'}):`, e.message);
+  }
+
+  try {
+    if (await consultarESPN(fechaObjetivo, esManana)) return true;
+  } catch (e) {
+    console.error(`Error en ESPN (${esManana ? 'Mañana' : 'Hoy'}):`, e.message);
+  }
+
+  return false;
+}
+
 async function ejecutar() {
-  let errorOficial = null;
-  let errorESPN = null;
+  const hoy = obtenerFechaUruguay(0);
+  const manana = obtenerFechaUruguay(1);
 
-  try {
-    if (await consultarNacionalOficial()) return;
-  } catch (err) {
-    errorOficial = err.message;
-  }
+  // 1. Busca si hay partido HOY
+  const hayHoy = await verificarFecha(hoy, false);
 
-  try {
-    if (await consultarESPN()) return;
-  } catch (err) {
-    errorESPN = err.message;
-  }
-
-  if (errorOficial && errorESPN) {
-    await enviarMensajeTelegram(
-      `⚠️ <b>ALERTA TÉCNICA - BOT NACIONAL</b>\n\n` +
-      `No se pudo consultar la información en ninguna fuente:\n` +
-      `• Web Oficial: ${errorOficial}\n` +
-      `• ESPN: ${errorESPN}`
-    );
+  // 2. Si no hay hoy, busca si hay partido MAÑANA
+  if (!hayHoy) {
+    await verificarFecha(manana, true);
   }
 }
 
