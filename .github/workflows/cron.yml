@@ -2,13 +2,14 @@ name: Notificación de Partido
 
 on:
   schedule:
-    - cron: '0 13 * * *'
+    # 12:14 UTC = 09:14 AM de Uruguay (UTC-3)
+    # Usar el minuto 14 esquiva la cola del minuto 0
+    - cron: '14 12 * * *'
   workflow_dispatch:
 
 jobs:
   ejecutar-script:
     runs-on: ubuntu-latest
-
     steps:
       - name: Descargar repositorio
         uses: actions/checkout@v4
